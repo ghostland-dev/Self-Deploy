@@ -1,0 +1,9 @@
+{
+  "app_name": "mon-app-python",
+  "app_type": "dynamic",
+  "build_dir": "./",
+  "domain": "python.qiwiiz.space",
+  "framework": "python",
+  "port": 5000,
+  "description": "Application Python/Flask"
+}

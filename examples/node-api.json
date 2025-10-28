@@ -1,0 +1,9 @@
+{
+  "app_name": "mon-api-node",
+  "app_type": "dynamic",
+  "build_dir": "./",
+  "domain": "api.qiwiiz.space",
+  "framework": "node",
+  "port": 3000,
+  "description": "API Node.js/Express"
+}

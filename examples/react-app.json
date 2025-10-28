@@ -1,0 +1,7 @@
+{
+  "app_name": "mon-app-react",
+  "app_type": "static",
+  "build_dir": "./dist",
+  "domain": "mon-app.qiwiiz.space",
+  "description": "Application React statique"
+}

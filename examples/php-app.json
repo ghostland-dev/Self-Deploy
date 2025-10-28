@@ -1,0 +1,8 @@
+{
+  "app_name": "mon-app-php",
+  "app_type": "dynamic",
+  "build_dir": "./",
+  "domain": "php.qiwiiz.space",
+  "framework": "php",
+  "description": "Application PHP/Laravel"
+}

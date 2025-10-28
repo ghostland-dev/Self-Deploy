@@ -1,0 +1,9 @@
+{
+  "app_name": "mon-app-nextjs",
+  "app_type": "dynamic",
+  "build_dir": "./",
+  "domain": "app.qiwiiz.space",
+  "framework": "next",
+  "port": 3001,
+  "description": "Application Next.js"
+}

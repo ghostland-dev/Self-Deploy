@@ -1,0 +1,425 @@
+name: Build et Déploiement Docker Automatique
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job de construction des images Docker
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      matrix:
+        include:
+          - app_type: "static"
+            dockerfile: "Dockerfile.static"
+            context: "."
+          - app_type: "node"
+            dockerfile: "Dockerfile.node"
+            context: "."
+          - app_type: "python"
+            dockerfile: "Dockerfile.python"
+            context: "."
+          - app_type: "php"
+            dockerfile: "Dockerfile.php"
+            context: "."
+    
+    steps:
+    - name: Checkout du code
+      uses: actions/checkout@v4
+      
+    - name: Configuration Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'npm'
+        
+    - name: Installation des dépendances Node.js
+      run: |
+        if [ -f package.json ]; then
+          npm ci
+        fi
+        
+    - name: Construction de l'application Node.js
+      run: |
+        if [ -f package.json ] && grep -q '"build"' package.json; then
+          npm run build
+        fi
+        
+    - name: Configuration Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+        
+    - name: Installation des dépendances Python
+      run: |
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        
+    - name: Configuration PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.4'
+        
+    - name: Installation des dépendances PHP
+      run: |
+        if [ -f composer.json ]; then
+          composer install --no-dev --optimize-autoloader
+        fi
+        
+    - name: Créer les Dockerfiles automatiquement
+      run: |
+        # Créer Dockerfile pour application statique
+        cat > Dockerfile.static << 'EOF'
+        FROM nginx:alpine
+        COPY dist/ /usr/share/nginx/html/
+        COPY nginx.conf /etc/nginx/nginx.conf
+        EXPOSE 80
+        CMD ["nginx", "-g", "daemon off;"]
+        EOF
+        
+        # Créer nginx.conf pour applications statiques
+        cat > nginx.conf << 'EOF'
+        events {
+            worker_connections 1024;
+        }
+        
+        http {
+            include /etc/nginx/mime.types;
+            default_type application/octet-stream;
+            
+            server {
+                listen 80;
+                server_name localhost;
+                root /usr/share/nginx/html;
+                index index.html;
+                
+                location / {
+                    try_files $uri $uri/ /index.html;
+                }
+                
+                location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+                    expires 1y;
+                    add_header Cache-Control "public, immutable";
+                }
+            }
+        }
+        EOF
+        
+        # Créer Dockerfile pour Node.js
+        cat > Dockerfile.node << 'EOF'
+        FROM node:22-alpine
+        WORKDIR /app
+        COPY package*.json ./
+        RUN npm ci --only=production
+        COPY . .
+        EXPOSE 3000
+        CMD ["npm", "start"]
+        EOF
+        
+        # Créer Dockerfile pour Python
+        cat > Dockerfile.python << 'EOF'
+        FROM python:3.12-slim
+        WORKDIR /app
+        COPY requirements.txt .
+        RUN pip install --no-cache-dir -r requirements.txt
+        COPY . .
+        EXPOSE 5000
+        CMD ["python", "app.py"]
+        EOF
+        
+        # Créer Dockerfile pour PHP
+        cat > Dockerfile.php << 'EOF'
+        FROM php:8.4-fpm-alpine
+        RUN apk add --no-cache nginx
+        WORKDIR /var/www/html
+        COPY . .
+        RUN chown -R www-data:www-data /var/www/html
+        EXPOSE 80
+        CMD ["php-fpm"]
+        EOF
+        
+    - name: Connexion au Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extraire les métadonnées
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=${{ matrix.app_type }}-latest
+        
+    - name: Construire et pousser l'image Docker
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.context }}
+        file: ${{ matrix.dockerfile }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=ghcr
+        cache-to: type=ghcr,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  # Job de déploiement sur le serveur
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout du code
+      uses: actions/checkout@v4
+      
+    - name: Téléchargement des scripts de déploiement
+      run: |
+        curl -o deploy-docker.sh https://raw.githubusercontent.com/votre-username/deploy-system/main/deploy-docker.sh
+        curl -o caddy-manager.sh https://raw.githubusercontent.com/votre-username/deploy-system/main/caddy-manager.sh
+        curl -o ssl-deploy.sh https://raw.githubusercontent.com/votre-username/deploy-system/main/ssl-deploy.sh
+        chmod +x deploy-docker.sh caddy-manager.sh ssl-deploy.sh
+        
+    - name: Déterminer le type d'application
+      id: app-type
+      run: |
+        if [ -f "deploy-config.json" ]; then
+          APP_TYPE=$(jq -r '.app_type' deploy-config.json)
+          APP_NAME=$(jq -r '.app_name' deploy-config.json)
+          FRAMEWORK=$(jq -r '.framework // "unknown"' deploy-config.json)
+          PORT=$(jq -r '.port // 3000' deploy-config.json)
+        elif [ -f package.json ]; then
+          if grep -q '"build"' package.json; then
+            APP_TYPE="static"
+            FRAMEWORK="static"
+            PORT="8080"
+          else
+            APP_TYPE="dynamic"
+            FRAMEWORK="node"
+            PORT="3000"
+          fi
+          APP_NAME="${{ github.event.repository.name }}"
+        elif [ -f requirements.txt ]; then
+          APP_TYPE="dynamic"
+          FRAMEWORK="python"
+          PORT="5000"
+          APP_NAME="${{ github.event.repository.name }}"
+        elif [ -f composer.json ]; then
+          APP_TYPE="dynamic"
+          FRAMEWORK="php"
+          PORT="8080"
+          APP_NAME="${{ github.event.repository.name }}"
+        else
+          echo "Type d'application non reconnu"
+          exit 1
+        fi
+        
+        echo "app_type=$APP_TYPE" >> $GITHUB_OUTPUT
+        echo "app_name=$APP_NAME" >> $GITHUB_OUTPUT
+        echo "framework=$FRAMEWORK" >> $GITHUB_OUTPUT
+        echo "port=$PORT" >> $GITHUB_OUTPUT
+        
+    - name: Créer la configuration de déploiement Docker
+      run: |
+        cat > docker-deploy-config.json << EOF
+        {
+          "app_name": "${{ steps.app-type.outputs.app_name }}",
+          "app_type": "${{ steps.app-type.outputs.app_type }}",
+          "build_dir": "./",
+          "domain": "${{ steps.app-type.outputs.app_name }}.qiwiiz.space",
+          "framework": "${{ steps.app-type.outputs.framework }}",
+          "port": ${{ steps.app-type.outputs.port }},
+          "docker": {
+            "enabled": true,
+            "image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.app-type.outputs.framework }}-latest",
+            "registry": "${{ env.REGISTRY }}",
+            "pull_policy": "always"
+          },
+          "ssl": {
+            "enabled": true,
+            "auto_renew": true,
+            "subdomain": "${{ steps.app-type.outputs.app_name }}.qiwiiz.space"
+          }
+        }
+        EOF
+        
+    - name: Déploiement Docker sur le serveur
+      env:
+        SSH_USER: ${{ secrets.SSH_USER }}
+        SSH_HOST: ${{ secrets.SSH_HOST }}
+        SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        DOCKER_REGISTRY: ${{ env.REGISTRY }}
+        DOCKER_IMAGE: ${{ env.IMAGE_NAME }}
+        DOCKER_TAG: ${{ steps.app-type.outputs.framework }}-latest
+      run: |
+        # Créer le script de déploiement Docker avec image pré-construite
+        cat > deploy-docker-image.sh << 'EOF'
+        #!/bin/bash
+        
+        set -e
+        
+        # Configuration
+        SSH_USER="$SSH_USER"
+        SSH_HOST="$SSH_HOST"
+        SSH_PASSWORD="$SSH_PASSWORD"
+        DOCKER_REGISTRY="$DOCKER_REGISTRY"
+        DOCKER_IMAGE="$DOCKER_IMAGE"
+        DOCKER_TAG="$DOCKER_TAG"
+        REMOTE_DEPLOY_DIR="/home/qiwiiz/apps"
+        DOCKER_COMPOSE_DIR="/home/qiwiiz/docker-compose"
+        
+        # Fonction pour exécuter des commandes SSH
+        ssh_exec() {
+            sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "$1"
+        }
+        
+        # Fonction pour copier des fichiers via SCP
+        scp_copy() {
+            sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no -r "$1" "$SSH_USER@$SSH_HOST:$2"
+        }
+        
+        # Charger la configuration
+        APP_NAME=$(jq -r '.app_name' docker-deploy-config.json)
+        APP_TYPE=$(jq -r '.app_type' docker-deploy-config.json)
+        DOMAIN=$(jq -r '.domain' docker-deploy-config.json)
+        PORT=$(jq -r '.port' docker-deploy-config.json)
+        
+        echo "Déploiement de l'image Docker: $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG"
+        
+        # Créer le répertoire de déploiement
+        ssh_exec "mkdir -p '$DOCKER_COMPOSE_DIR/$APP_NAME'"
+        
+        # Créer le docker-compose.yml pour l'image pré-construite
+        ssh_exec "cat > '$DOCKER_COMPOSE_DIR/$APP_NAME/docker-compose.yml' << 'EOF'
+        version: '3.8'
+        services:
+          $APP_NAME:
+            image: $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG
+            container_name: $APP_NAME
+            restart: unless-stopped
+            ports:
+              - \"$PORT:$PORT\"
+            environment:
+              - NODE_ENV=production
+              - PORT=$PORT
+            networks:
+              - caddy-network
+            healthcheck:
+              test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:$PORT/health\"]
+              interval: 30s
+              timeout: 10s
+              retries: 3
+        
+        networks:
+          caddy-network:
+            external: true
+        EOF"
+        
+        # Créer le réseau Docker si nécessaire
+        ssh_exec "docker network create caddy-network 2>/dev/null || true"
+        
+        # Se connecter au registry et tirer l'image
+        ssh_exec "echo '${{ secrets.GITHUB_TOKEN }}' | docker login $DOCKER_REGISTRY -u '${{ github.actor }}' --password-stdin"
+        
+        # Arrêter l'ancien conteneur s'il existe
+        ssh_exec "cd '$DOCKER_COMPOSE_DIR/$APP_NAME' && docker-compose down || true"
+        
+        # Tirer la nouvelle image
+        ssh_exec "docker pull $DOCKER_REGISTRY/$DOCKER_IMAGE:$DOCKER_TAG"
+        
+        # Démarrer le nouveau conteneur
+        ssh_exec "cd '$DOCKER_COMPOSE_DIR/$APP_NAME' && docker-compose up -d"
+        
+        # Créer la configuration Caddy
+        ssh_exec "cat >> '/etc/caddy/Caddyfile' << 'EOF'
+        
+        # Configuration pour $APP_NAME
+        $DOMAIN {
+            reverse_proxy localhost:$PORT {
+                health_uri /health
+                health_interval 30s
+                health_timeout 5s
+            }
+            
+            header {
+                X-Content-Type-Options nosniff
+                X-Frame-Options DENY
+                X-XSS-Protection \"1; mode=block\"
+                Referrer-Policy strict-origin-when-cross-origin
+                Permissions-Policy \"geolocation=(), microphone=(), camera=()\"
+                Strict-Transport-Security \"max-age=31536000; includeSubDomains\"
+            }
+            
+            encode gzip
+            
+            rate_limit {
+                zone dynamic {
+                    key {remote_host}
+                    events 200
+                    window 1m
+                }
+            }
+            
+            log {
+                output file /var/log/caddy/$APP_NAME.log {
+                    roll_size 100mb
+                    roll_keep 5
+                    roll_keep_for 720h
+                }
+                format json
+            }
+        }
+        EOF"
+        
+        # Recharger Caddy
+        ssh_exec "caddy reload --config /etc/caddy/Caddyfile"
+        
+        echo "Déploiement terminé avec succès!"
+        echo "Application accessible sur: https://$DOMAIN"
+        EOF
+        
+        chmod +x deploy-docker-image.sh
+        
+        # Exécuter le déploiement
+        ./deploy-docker-image.sh
+        
+    - name: Vérification du déploiement
+      env:
+        SSH_USER: ${{ secrets.SSH_USER }}
+        SSH_HOST: ${{ secrets.SSH_HOST }}
+        SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      run: |
+        APP_NAME="${{ steps.app-type.outputs.app_name }}"
+        DOMAIN="${{ steps.app-type.outputs.app_name }}.qiwiiz.space"
+        
+        # Vérifier que le conteneur est en cours d'exécution
+        sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" "docker ps | grep $APP_NAME"
+        
+        # Vérifier que l'application répond
+        sleep 30
+        curl -f "https://$DOMAIN" || echo "Application non accessible (peut être normal pendant le démarrage)"
+        
+    - name: Nettoyage
+      if: always()
+      run: |
+        rm -f docker-deploy-config.json deploy-docker-image.sh
+        rm -f deploy-docker.sh caddy-manager.sh ssl-deploy.sh

@@ -1,0 +1,99 @@
+name: Déploiement Automatique
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout du code
+      uses: actions/checkout@v3
+      
+    - name: Configuration Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '22'
+        cache: 'npm'
+        
+    - name: Installation des dépendances
+      run: |
+        if [ -f package.json ]; then
+          npm install
+        fi
+        
+    - name: Construction de l'application
+      run: |
+        if [ -f package.json ] && grep -q '"build"' package.json; then
+          npm run build
+        fi
+        
+    - name: Configuration Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Installation des dépendances Python
+      run: |
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        
+    - name: Configuration PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.4'
+        
+    - name: Installation des dépendances PHP
+      run: |
+        if [ -f composer.json ]; then
+          composer install --no-dev --optimize-autoloader
+        fi
+        
+    - name: Téléchargement du script de déploiement
+      run: |
+        curl -o deploy.sh https://raw.githubusercontent.com/votre-username/deploy-system/main/deploy.sh
+        curl -o github-deploy.sh https://raw.githubusercontent.com/votre-username/deploy-system/main/github-deploy.sh
+        chmod +x deploy.sh github-deploy.sh
+        
+    - name: Déploiement
+      env:
+        SSH_USER: ${{ secrets.SSH_USER }}
+        SSH_HOST: ${{ secrets.SSH_HOST }}
+        SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      run: |
+        # Déterminer le type d'application et utiliser la configuration appropriée
+        if [ -f "deploy-config.json" ]; then
+          ./github-deploy.sh deploy deploy-config.json production
+        elif [ -f package.json ]; then
+          # Application Node.js/React/Vue/Angular
+          if grep -q '"build"' package.json; then
+            # Application statique
+            echo '{"app_name":"'${{ github.event.repository.name }}'","app_type":"static","build_dir":"./dist","domain":"'${{ github.event.repository.name }}'.qiwiiz.space"}' > temp-config.json
+          else
+            # Application Node.js dynamique
+            echo '{"app_name":"'${{ github.event.repository.name }}'","app_type":"dynamic","build_dir":"./","domain":"'${{ github.event.repository.name }}'.qiwiiz.space","framework":"node","port":3000}' > temp-config.json
+          fi
+          ./github-deploy.sh deploy temp-config.json production
+        elif [ -f requirements.txt ]; then
+          # Application Python
+          echo '{"app_name":"'${{ github.event.repository.name }}'","app_type":"dynamic","build_dir":"./","domain":"'${{ github.event.repository.name }}'.qiwiiz.space","framework":"python","port":5000}' > temp-config.json
+          ./github-deploy.sh deploy temp-config.json production
+        elif [ -f composer.json ]; then
+          # Application PHP
+          echo '{"app_name":"'${{ github.event.repository.name }}'","app_type":"dynamic","build_dir":"./","domain":"'${{ github.event.repository.name }}'.qiwiiz.space","framework":"php"}' > temp-config.json
+          ./github-deploy.sh deploy temp-config.json production
+        else
+          echo "Type d'application non reconnu"
+          exit 1
+        fi
+        
+    - name: Nettoyage
+      if: always()
+      run: |
+        rm -f temp-config.json deploy.sh github-deploy.sh
