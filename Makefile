@@ -87,16 +87,50 @@ deploy-python: ## Déployer une application Python
 deploy-php: ## Déployer une application PHP
 	@$(MAKE) deploy APP=php
 
-# Gestion des déploiements
-.PHONY: list
-list: ## Lister tous les déploiements
-	@echo "$(BLUE)Liste des déploiements:$(NC)"
-	@./deploy-docker.sh list
+# Gestion des sous-domaines qiwiiz.space
+.PHONY: list-subdomains
+list-subdomains: ## Lister les sous-domaines disponibles
+	@echo "$(BLUE)Sous-domaines disponibles:$(NC)"
+	@./subdomain-manager.sh list-available
 
-.PHONY: list-ssl
-list-ssl: ## Lister tous les déploiements SSL
-	@echo "$(BLUE)Liste des déploiements SSL:$(NC)"
-	@./ssl-deploy.sh list-ssl
+.PHONY: list-used-subdomains
+list-used-subdomains: ## Lister les sous-domaines utilisés
+	@echo "$(BLUE)Sous-domaines utilisés:$(NC)"
+	@./subdomain-manager.sh list-used
+
+.PHONY: assign-subdomain
+assign-subdomain: ## Assigner un sous-domaine (APP=nom SUBDOMAIN=subdomain TYPE=type PORT=port)
+	@if [ -z "$(APP)" ] || [ -z "$(SUBDOMAIN)" ] || [ -z "$(TYPE)" ]; then \
+		echo "$(RED)Erreur: Spécifiez APP=nom SUBDOMAIN=subdomain TYPE=type$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Assignation du sous-domaine $(SUBDOMAIN) à $(APP)...$(NC)"
+	@./subdomain-manager.sh assign $(APP) $(SUBDOMAIN) $(TYPE) $(PORT)
+	@echo "$(GREEN)✓ Sous-domaine $(SUBDOMAIN).qiwiiz.space assigné$(NC)"
+
+.PHONY: suggest-subdomain
+suggest-subdomain: ## Suggérer un sous-domaine (APP=nom TYPE=type)
+	@if [ -z "$(APP)" ] || [ -z "$(TYPE)" ]; then \
+		echo "$(RED)Erreur: Spécifiez APP=nom TYPE=type$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Suggestion de sous-domaine pour $(APP)...$(NC)"
+	@./subdomain-manager.sh suggest $(APP) $(TYPE)
+
+.PHONY: deploy-auto-subdomain
+deploy-auto-subdomain: ## Déployer avec sous-domaine automatique (APP=nom TYPE=type PORT=port IMAGE=image TAG=tag)
+	@if [ -z "$(APP)" ] || [ -z "$(TYPE)" ] || [ -z "$(IMAGE)" ] || [ -z "$(TAG)" ]; then \
+		echo "$(RED)Erreur: Spécifiez APP=nom TYPE=type IMAGE=image TAG=tag$(NC)"; \
+		exit 1; \
+	fi
+	@echo "$(BLUE)Déploiement avec sous-domaine automatique: $(APP)...$(NC)"
+	@./subdomain-manager.sh deploy-auto $(APP) $(TYPE) $(PORT) $(IMAGE) $(TAG)
+	@echo "$(GREEN)✓ Application $(APP) déployée avec sous-domaine automatique$(NC)"
+
+.PHONY: subdomain-status
+subdomain-status: ## Afficher le statut des sous-domaines
+	@echo "$(BLUE)Statut des sous-domaines:$(NC)"
+	@./subdomain-manager.sh status
 
 .PHONY: status
 status: ## Vérifier le statut des services
@@ -299,5 +333,8 @@ info: ## Afficher les informations système
 	@echo "Répertoire Docker Compose: $(DOCKER_COMPOSE_DIR)"
 	@sshpass -p $(SSH_PASSWORD) ssh -o StrictHostKeyChecking=no $(SSH_USER)@$(SSH_HOST) 'echo "OS: $$(lsb_release -d | cut -f2)" && echo "Uptime: $$(uptime -p)" && echo "Load: $$(uptime | awk -F"load average:" '"'"'{ print $$2 }'"'"')"'
 
-# Par défaut, afficher l'aide
-.DEFAULT_GOAL := help
+# Interface interactive
+.PHONY: interactive
+interactive: ## Lancer l'interface interactive
+	@echo "$(BLUE)Lancement de l'interface interactive...$(NC)"
+	@./interactive-deploy.sh
